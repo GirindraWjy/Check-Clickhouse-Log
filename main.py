@@ -11,6 +11,7 @@ def main() -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         level=logging.INFO,
     )
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     config = load_config()
     application = Application.builder().token(config.telegram_token).build()
     register_handlers(application, config)

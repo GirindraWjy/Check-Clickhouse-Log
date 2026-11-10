@@ -29,6 +29,7 @@ class BotHandlers:
 
     async def start(self, update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
         if update.effective_message is not None:
+            _log_requester(update, "/start")
             await update.effective_message.reply_text(MENU_TEXT)
 
     async def cek61(self, update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -36,6 +37,7 @@ class BotHandlers:
         if message is None:
             return
 
+        _log_requester(update, "/cek61")
         if len(_context.args) != 1:
             await message.reply_text(
                 "Format: /cek61 HH:MM-HH:MM\n"
@@ -137,6 +139,20 @@ class BotHandlers:
 
 def _utf16_length(text: str) -> int:
     return len(text.encode("utf-16-le")) // 2
+
+
+def _log_requester(update: Update, command: str) -> None:
+    user = update.effective_user
+    chat = update.effective_chat
+    logger.info(
+        "Permintaan Telegram: command=%s user_id=%s username=%s "
+        "full_name=%r chat_id=%s",
+        command,
+        user.id if user is not None else "unknown",
+        f"@{user.username}" if user is not None and user.username else "unknown",
+        user.full_name if user is not None else "unknown",
+        chat.id if chat is not None else "unknown",
+    )
 
 
 def _format_code_blocks_html(text: str) -> str:

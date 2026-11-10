@@ -57,6 +57,10 @@ journal menyertakan zona waktu dan dinormalisasi ke UTC untuk batas query agar
 tidak bergantung pada timezone ClickHouse. Konfigurasi database bersifat
 opsional; jika belum lengkap atau query gagal, ringkasan tetap dikirim dan
 status evidence tambahan dicantumkan.
+Log HTTP sukses dari `httpx` saat polling Telegram disembunyikan agar tidak
+memenuhi console; polling tetap berjalan supaya bot dapat menerima perintah.
+Setiap `/start` dan `/cek61` mencatat waktu, command, user ID, username, nama
+pengguna, dan chat ID.
 
 ## Menjalankan
 
