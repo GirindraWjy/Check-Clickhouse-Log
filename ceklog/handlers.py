@@ -83,12 +83,15 @@ class BotHandlers:
             await self._send_code_block(update, f"Perintah di server gagal:\n{exc}")
         else:
             await self._send_result(message, result.summary)
-            if result.query_views_csv is not None:
+            if result.query_evidence_workbook is not None:
                 await message.reply_document(
-                    document=BytesIO(result.query_views_csv),
-                    filename=result.query_views_filename
-                    or "clickhouse_query_views_log.csv",
-                    caption="Evidence tambahan query_views_log (CSV).",
+                    document=BytesIO(result.query_evidence_workbook),
+                    filename=result.query_evidence_filename
+                    or "clickhouse_query_evidence.xlsx",
+                    caption=(
+                        "Evidence ClickHouse Excel: sheet query_views_log "
+                        "dan query_log."
+                    ),
                 )
 
     async def _send_result(self, message: Message, result: str) -> None:

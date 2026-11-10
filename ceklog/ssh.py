@@ -1,5 +1,7 @@
 import base64
+import csv
 import ipaddress
+import io
 import logging
 import re
 from dataclasses import dataclass
@@ -8,6 +10,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from openpyxl import Workbook
+from openpyxl.styles import Font
 import paramiko
 
 from ceklog.analysis_phase2 import summarize_restart_causes
@@ -29,7 +33,7 @@ RESTART_EVENT_PATTERN = re.compile(
     r"(?:clickhouse|clickhouse-server))",
     re.I,
 )
-CLICKHOUSE_QUERY = (
+CLICKHOUSE_QUERY_VIEWS = (
     "WITH toDateTime('{event_time}', 'UTC') AS restart_time "
     "SELECT view_name, "
     "count() runs, "
@@ -44,13 +48,24 @@ CLICKHOUSE_QUERY = (
     "LIMIT 20 "
     "FORMAT CSVWithNames"
 )
+CLICKHOUSE_QUERY_LOG = (
+    "WITH toDateTime('{event_time}', 'UTC') AS restart_time "
+    "SELECT replaceAll(query, '\\n', ' ') AS query, "
+    "event_time, "
+    "formatReadableSize(memory_usage) AS peak_memory "
+    "FROM system.query_log "
+    "WHERE event_time > restart_time - INTERVAL 1 HOUR "
+    "AND event_time <= restart_time "
+    "ORDER BY memory_usage DESC "
+    "FORMAT CSVWithNames"
+)
 
 
 @dataclass(frozen=True)
 class CheckResult:
     summary: str
-    query_views_csv: bytes | None = None
-    query_views_filename: str | None = None
+    query_evidence_workbook: bytes | None = None
+    query_evidence_filename: str | None = None
 
 
 class ClickHouseQueryError(RuntimeError):
@@ -155,7 +170,7 @@ def fetch_clickhouse_errors(
         )
 
     try:
-        csv_content = _fetch_query_views_csv(
+        workbook_content = _fetch_query_evidence_workbook(
             db_host,
             db_scheme,
             db_port,
@@ -164,16 +179,16 @@ def fetch_clickhouse_errors(
             restart_time,
         )
     except ClickHouseQueryError as exc:
-        logger.warning("Gagal mengambil evidence query_views_log: %s", exc)
+        logger.warning("Gagal mengambil evidence query ClickHouse: %s", exc)
         return CheckResult(
-            summary + f"\n\nEvidence query_views_log gagal diambil: {exc}"
+            summary + f"\n\nEvidence query ClickHouse gagal diambil: {exc}"
         )
 
     filename_time = re.sub(r"\D", "", restart_time)
     return CheckResult(
         summary,
-        query_views_csv=csv_content,
-        query_views_filename=f"clickhouse_query_views_log_{filename_time}.csv",
+        query_evidence_workbook=workbook_content,
+        query_evidence_filename=f"clickhouse_query_evidence_{filename_time}.xlsx",
     )
 
 
@@ -197,7 +212,7 @@ def _latest_restart_time(journal_logs: str) -> str | None:
     return event_time
 
 
-def _fetch_query_views_csv(
+def _fetch_query_evidence_workbook(
     host: str,
     database: str,
     port: str,
@@ -232,31 +247,81 @@ def _fetch_query_views_csv(
     authorization = base64.b64encode(
         f"{username}:{password}".encode("utf-8")
     ).decode("ascii")
-    query = CLICKHOUSE_QUERY.format(event_time=restart_time)
     query_parameters = urlencode({"database": database.strip()})
-    request = Request(
-        f"http://{normalized_host}:{port_number}/?{query_parameters}",
-        data=query.encode("utf-8"),
-        headers={
-            "Authorization": f"Basic {authorization}",
-            "Content-Type": "text/plain; charset=utf-8",
-        },
-        method="POST",
-    )
 
-    try:
-        with urlopen(request, timeout=30) as response:
-            return response.read()
-    except HTTPError as exc:
-        response_text = exc.read(500).decode("utf-8", errors="replace").strip()
-        details = f"HTTP {exc.code}"
-        if response_text:
-            details += f": {response_text}"
-        raise ClickHouseQueryError(details) from exc
-    except URLError as exc:
-        raise ClickHouseQueryError(f"koneksi gagal: {exc.reason}") from exc
-    except (TimeoutError, OSError) as exc:
-        raise ClickHouseQueryError(f"koneksi gagal: {exc}") from exc
+    workbook = Workbook()
+    query_views_sheet = workbook.active
+    query_views_sheet.title = "query_views_log"
+    query_log_sheet = workbook.create_sheet("query_log")
+
+    for sheet, query_template, query_name in (
+        (query_views_sheet, CLICKHOUSE_QUERY_VIEWS, "query_views_log"),
+        (query_log_sheet, CLICKHOUSE_QUERY_LOG, "query_log"),
+    ):
+        query = query_template.format(event_time=restart_time)
+        request = Request(
+            f"http://{normalized_host}:{port_number}/?{query_parameters}",
+            data=query.encode("utf-8"),
+            headers={
+                "Authorization": f"Basic {authorization}",
+                "Content-Type": "text/plain; charset=utf-8",
+            },
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=30) as response:
+                csv_content = response.read().decode("utf-8-sig")
+        except HTTPError as exc:
+            response_text = exc.read(500).decode("utf-8", errors="replace").strip()
+            details = f"HTTP {exc.code}"
+            if response_text:
+                details += f": {response_text}"
+            raise ClickHouseQueryError(f"{query_name}: {details}") from exc
+        except URLError as exc:
+            raise ClickHouseQueryError(
+                f"{query_name}: koneksi gagal: {exc.reason}"
+            ) from exc
+        except (TimeoutError, OSError) as exc:
+            raise ClickHouseQueryError(
+                f"{query_name}: koneksi gagal: {exc}"
+            ) from exc
+
+        rows = csv.reader(io.StringIO(csv_content, newline=""))
+        try:
+            headers = next(rows)
+        except StopIteration as exc:
+            raise ClickHouseQueryError(
+                f"{query_name}: ClickHouse mengembalikan CSV kosong."
+            ) from exc
+        if not headers:
+            raise ClickHouseQueryError(
+                f"{query_name}: header CSV tidak ditemukan."
+            )
+
+        sheet.append(headers)
+        for cell in sheet[1]:
+            cell.data_type = "s"
+        for row_number, row in enumerate(rows, start=2):
+            if len(row) != len(headers):
+                raise ClickHouseQueryError(
+                    f"{query_name}: format CSV tidak valid pada baris {row_number}."
+                )
+            if row_number > 1_048_576:
+                raise ClickHouseQueryError(
+                    f"{query_name}: jumlah baris melebihi batas maksimum Excel."
+                )
+            sheet.append(row)
+            for cell in sheet[row_number]:
+                cell.data_type = "s"
+
+        for cell in sheet[1]:
+            cell.font = Font(bold=True)
+        sheet.freeze_panes = "A2"
+        sheet.auto_filter.ref = sheet.dimensions
+
+    output = io.BytesIO()
+    workbook.save(output)
+    return output.getvalue()
 
 
 def _build_phase2_command(start_time: str, end_time: str) -> str:

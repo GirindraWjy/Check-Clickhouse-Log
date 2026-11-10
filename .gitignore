@@ -27,6 +27,7 @@ dist/
 *.log
 ch_restart_log.txt
 clickhouse_query_views_log_*.csv
+clickhouse_query_evidence_*.xlsx
 
 # IDE and OS files
 .vscode/

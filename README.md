@@ -50,8 +50,9 @@ protokol jaringan. Query dikirim melalui HTTP interface ClickHouse pada
 `db_host:db_port` (contoh port HTTP `8123`); `db_pass` boleh kosong jika user
 ClickHouse tidak memakai password. Jika analisis restart menghasilkan
 confidence tinggi (minimal 70/100) dan waktu kejadian ditemukan pada journal,
-bot menjalankan query `system.query_views_log` untuk satu jam sebelum waktu
-restart yang tercatat pada journal dan mengirim hasilnya sebagai CSV. Timestamp
+bot menjalankan query `system.query_views_log` dan `system.query_log` untuk satu
+jam sebelum waktu restart yang tercatat pada journal, lalu mengirim satu file
+Excel berisi sheet `query_views_log` dan `query_log`. Timestamp
 journal menyertakan zona waktu dan dinormalisasi ke UTC untuk batas query agar
 tidak bergantung pada timezone ClickHouse. Konfigurasi database bersifat
 opsional; jika belum lengkap atau query gagal, ringkasan tetap dikirim dan
@@ -71,7 +72,7 @@ python main.py
 - `main.py` menginisialisasi konfigurasi, aplikasi Telegram, dan handler.
 - `ceklog/config.py` memuat serta memvalidasi konfigurasi dari `.env`.
 - `ceklog/handlers.py` menangani command Telegram serta mengirim hasil panjang
-  sebagai file teks dan evidence ClickHouse sebagai CSV.
+  sebagai file teks dan evidence ClickHouse sebagai workbook Excel.
 - `ceklog/ssh.py` menjalankan command SSH untuk kedua sumber log dan query
   evidence melalui HTTP interface ClickHouse.
 - `ceklog/analysis.py` menganalisis log ClickHouse secara heuristik.
